@@ -1,5 +1,5 @@
 [package]
-name = "gitgud"
+name = "slurm"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,6 +8,4 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.0.26", features = ["derive"] }
 git2 = "0.15.0"
-reqwest = { version = "0.11.13", features = ["json"] }
-tokio = { version = "1.22.0", features = ["full"] }
 url = "2.3.1"
