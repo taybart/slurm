@@ -79,7 +79,7 @@ fn validate_url(input: &String) -> Result<(Url, String), String> {
 
     let slugs: Vec<&str> = url.path_segments().unwrap().collect();
 
-    if slugs[2] != "tree" || slugs[2] != "blob" {
+    if slugs[2] != "tree" && slugs[2] != "blob" {
         // TODO: github only
         return Err("malformed url, expected tree or blob in path name".to_string());
     }
