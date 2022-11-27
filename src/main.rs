@@ -1,31 +1,36 @@
 use clap::Parser;
 use git2::{Cred, RemoteCallbacks};
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use url::Url;
 
 mod cli;
 
-fn get_remote_callbacks() -> RemoteCallbacks<'static> {
+fn get_remote_callbacks(identity_file: Option<PathBuf>) -> RemoteCallbacks<'static> {
+    let file = identity_file.unwrap_or(
+        Path::new(&format!("{}/.ssh/id_ed25519", env::var("HOME").unwrap())).to_path_buf(),
+    );
     let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(|_url, _username_from_url, _allowed_types| {
+    callbacks.credentials(move |_url, _username_from_url, _allowed_types| {
         Cred::ssh_key(
             "git", // TODO: github only
-            None,
-            Path::new(&format!("{}/.ssh/id_ed25519", env::var("HOME").unwrap())),
-            None,
+            None, &file, None,
         )
     });
     callbacks
 }
 
 // clone respository with ssh authentication
-fn clone(repo: &String, dest: String) -> Result<git2::Repository, git2::Error> {
+fn clone(
+    repo: &String,
+    dest: &PathBuf,
+    identity_file: Option<PathBuf>,
+) -> Result<git2::Repository, git2::Error> {
     // Prepare callbacks.
 
     // Prepare fetch options.
     let mut fo = git2::FetchOptions::new();
-    fo.remote_callbacks(get_remote_callbacks());
+    fo.remote_callbacks(get_remote_callbacks(identity_file));
 
     // Prepare builder.
     let mut builder = git2::build::RepoBuilder::new();
@@ -38,13 +43,18 @@ fn clone(repo: &String, dest: String) -> Result<git2::Repository, git2::Error> {
 fn parse_slugs(
     repo: &git2::Repository,
     slugs: Vec<&str>,
+    identity_file: Option<PathBuf>,
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
     let mut remote = repo.find_remote("origin").unwrap();
 
     // Connect to the remote and call the printing function for each of the
     // remote references.
     let connection = remote
-        .connect_auth(git2::Direction::Fetch, Some(get_remote_callbacks()), None)
+        .connect_auth(
+            git2::Direction::Fetch,
+            Some(get_remote_callbacks(identity_file)),
+            None,
+        )
         .unwrap();
 
     let rest = slugs[3..].join("/");
@@ -69,8 +79,8 @@ fn parse_slugs(
 
 fn validate_url(input: &String) -> Result<(Url, String), String> {
     let url = Url::parse(input).map_err(|e| format!("could not parse url {}", e))?;
+    // TODO: github only
     if url.host_str() != Some("github.com") {
-        // TODO: github only
         if !url.has_host() {
             return Err("no domain in url".to_string());
         }
@@ -84,36 +94,34 @@ fn validate_url(input: &String) -> Result<(Url, String), String> {
         return Err("malformed url, expected tree or blob in path name".to_string());
     }
 
-    // let repo = segments[0..2].join("/");
     let repo_name = format!("https://github.com/{}", slugs[0..2].join("/")); // TODO: github only
 
     Ok((url.clone(), repo_name))
 }
 
-fn cleanup(repo: &str) -> Result<(), String> {
-    println!("cleanup temp directory {}", repo);
+fn cleanup(repo: &PathBuf) -> Result<(), String> {
+    println!("cleanup temp directory {}", repo.display());
     std::fs::remove_dir_all(repo).map_err(|e| format!("remove tmp dir {}", e))
 }
-
-/*
- * TODO:
- * - [ ] more robust tmp directory
- */
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = cli::Cli::parse();
 
-    let input = cli.get;
-    let dest = "tmp";
+    let mut dest = env::temp_dir();
+    dest.push("slurmy");
 
-    let (url, repo_name) = validate_url(&input.to_string())?;
+    let (url, repo_name) = validate_url(&cli.get.to_string())?;
 
     println!("getting repo contents...");
 
-    let repo = clone(&repo_name, dest.to_string())
+    let repo = clone(&repo_name, &dest, cli.identity_file.to_owned())
         .map_err(|e| format!("could not clone repository {}", e))?;
 
-    let (branch, file) = parse_slugs(&repo, url.path_segments().unwrap().collect())?;
+    let (branch, file) = parse_slugs(
+        &repo,
+        url.path_segments().unwrap().collect(),
+        cli.identity_file,
+    )?;
     println!("{},{}", branch, file);
 
     println!("checking out branch...");
@@ -132,15 +140,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("getting files...");
 
-    // TODO: replace this with non-external commands
+    // TODO: replace this with non-external/non-platspecific commands
     std::process::Command::new("mv")
         .args(&[
-            format!("{}/{}", dest, file).as_str(),
+            // FIXME: should not use format
+            format!("{}/{}", dest.as_path().to_str().unwrap(), file).as_str(),
             format!("./{}", file.split("/").last().unwrap()).as_str(),
         ])
         .spawn()
         .unwrap();
 
-    cleanup(dest)?;
+    cleanup(&dest)?;
     Ok(())
 }
